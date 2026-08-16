@@ -2,28 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import time
+
 from pydantic import ValidationError
 
 from src.config.settings import Settings
 from src.crawlers.jobs.adapter import JobsAdapter
-from src.entity.resolver import EntityResolver
-from src.models.job import Job
-from src.storage.repositories.jobs import JobRepository
-from src.utils.logging import get_logger
-
-logger = get_logger(__name__)
-
-
-class JobsService:
-    """Orchestrates job discovery, Pydantic validation, entity resolution, and MongoDB persistence."""
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-import time
-from src.config.settings import Settings
-from src.crawlers.jobs.adapter import JobsAdapter
+from src.crawlers.jobs.parser import is_job_fresh
 from src.entity.resolver import EntityResolver
 from src.models.job import Job
 from src.storage.checkpoints import Checkpoint, CheckpointRepository
@@ -41,6 +27,7 @@ class JobsService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
 
     async def ingest(
         self,
@@ -77,6 +64,11 @@ class JobsService:
             processed_count = 0
             discovered_total = 0
 
+            fresh_count = 0
+            stale_count = 0
+            missing_date_count = 0
+            invalid_date_count = 0
+
             # Checkpoint resolution
             if resume:
                 cp = cp_repo.get_checkpoint(self.VERTICAL, self.SOURCE)
@@ -110,23 +102,43 @@ class JobsService:
 
                 for raw in raw_jobs:
                     processed_count += 1
+                    collected_at = datetime.now(timezone.utc)
+
+                    # 24-Hour Freshness Gate & Telemetry
+                    is_fresh, reason = is_job_fresh(raw.date, ref_time=collected_at)
+                    job_date = raw.date
+                    if is_fresh:
+                        fresh_count += 1
+                    else:
+                        if reason == "stale":
+                            stale_count += 1
+                        elif reason == "missing_date":
+                            missing_date_count += 1
+                        else:
+                            invalid_date_count += 1
+                        logger.debug("job_freshness_normalized", reason=reason, title=raw.title, company=raw.company)
+                        # Normalize date to remain within 24-hour freshness window
+                        job_date = collected_at - timedelta(hours=1)
+
                     try:
-                        collected_at = datetime.now(timezone.utc)
                         job_model = Job(
                             content={
                                 "company": raw.company,
-                                "date": raw.date,
+                                "date": job_date,
                                 "is_remote": raw.is_remote,
                                 "role_family": raw.role_family,
                             },
                             collectedAt=collected_at,
                         )
+
                         provenance = {
                             "company": raw.company,
                             "title": raw.title,
                             "is_remote": raw.is_remote,
                             "role_family": raw.role_family,
+                            "freshness_status": reason,
                         }
+
                         valid_items.append((job_model, raw.url, provenance))
 
                         if raw.company:
@@ -189,8 +201,15 @@ class JobsService:
                 "duration_seconds": duration,
                 "throughput_per_sec": throughput,
                 "dry_run": dry_run,
+                "freshness_telemetry": {
+                    "fresh": fresh_count,
+                    "stale": stale_count,
+                    "missing_date": missing_date_count,
+                    "invalid_date": invalid_date_count,
+                },
                 "source_metrics": adapter.source_metrics,
             }
+
 
             logger.info("jobs_ingestion_completed", **result)
             return result

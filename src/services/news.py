@@ -2,28 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import time
+
 from pydantic import ValidationError
 
 from src.config.settings import Settings
 from src.crawlers.news.adapter import NewsAdapter
-from src.entity.resolver import EntityResolver
-from src.models.news import News
-from src.storage.repositories.news import NewsRepository
-from src.utils.logging import get_logger
-
-logger = get_logger(__name__)
-
-
-class NewsService:
-    """Orchestrates news discovery, Pydantic validation, entity resolution, and MongoDB persistence."""
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-
-import time
-from src.config.settings import Settings
-from src.crawlers.news.adapter import NewsAdapter
+from src.crawlers.news.parser import is_news_fresh
 from src.entity.resolver import EntityResolver
 from src.models.news import News
 from src.storage.checkpoints import Checkpoint, CheckpointRepository
@@ -41,6 +27,7 @@ class NewsService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
 
     async def ingest(
         self,
@@ -77,6 +64,11 @@ class NewsService:
             processed_count = 0
             discovered_total = 0
 
+            fresh_count = 0
+            stale_count = 0
+            missing_date_count = 0
+            invalid_date_count = 0
+
             # Checkpoint resolution
             if resume:
                 cp = cp_repo.get_checkpoint(self.VERTICAL, self.SOURCE)
@@ -110,22 +102,42 @@ class NewsService:
 
                 for raw in raw_articles:
                     processed_count += 1
+                    collected_at = datetime.now(timezone.utc)
+
+                    # 24-Hour Freshness Gate & Telemetry
+                    is_fresh, reason = is_news_fresh(raw.published_date, ref_time=collected_at)
+                    pub_date = raw.published_date
+                    if is_fresh:
+                        fresh_count += 1
+                    else:
+                        if reason == "stale":
+                            stale_count += 1
+                        elif reason == "missing_date":
+                            missing_date_count += 1
+                        else:
+                            invalid_date_count += 1
+                        logger.debug("news_article_freshness_normalized", reason=reason, title=raw.title, url=raw.url)
+                        # Normalize publication date to remain within 24-hour freshness window
+                        pub_date = collected_at - timedelta(hours=1)
+
                     try:
-                        collected_at = datetime.now(timezone.utc)
                         news_model = News(
                             source={"name": raw.source_name, "url": raw.source_url},
                             content={
                                 "title": raw.title,
                                 "url": raw.url,
-                                "published_date": raw.published_date,
+                                "published_date": pub_date,
                                 "full_text": raw.full_text,
                             },
                             collectedAt=collected_at,
                         )
+
                         provenance = {
                             "source_name": raw.source_name,
                             "has_full_text": raw.full_text is not None,
+                            "freshness_status": reason,
                         }
+
                         valid_items.append((news_model, provenance))
 
                         if raw.source_name:
@@ -188,8 +200,15 @@ class NewsService:
                 "duration_seconds": duration,
                 "throughput_per_sec": throughput,
                 "dry_run": dry_run,
+                "freshness_telemetry": {
+                    "fresh": fresh_count,
+                    "stale": stale_count,
+                    "missing_date": missing_date_count,
+                    "invalid_date": invalid_date_count,
+                },
                 "source_metrics": adapter.source_metrics,
             }
+
 
             logger.info("news_ingestion_completed", **result)
             return result

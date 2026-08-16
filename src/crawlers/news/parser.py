@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import email.utils
 from html import unescape
 from html.parser import HTMLParser
@@ -79,12 +79,16 @@ def extract_clean_text(html_content: str | None) -> str | None:
     return stripped if len(stripped) >= 30 else None
 
 
-def parse_pub_date(date_str: str | None) -> datetime:
-    """Parse RSS/Atom publication date string into timezone-aware datetime."""
-    if not date_str or not date_str.strip():
-        return datetime.now(timezone.utc)
+def parse_pub_date_utc(date_str: str | None) -> datetime | None:
+    """Parse RSS/Atom publication date string into timezone-aware UTC datetime.
 
-    cleaned = date_str.strip()
+    Returns None if publication date cannot be reliably determined.
+    Never uses collection time as fallback.
+    """
+    if not date_str or not str(date_str).strip():
+        return None
+
+    cleaned = str(date_str).strip()
 
     # Try RFC 822 format (e.g. Wed, 15 Aug 2026 12:00:00 +0000)
     try:
@@ -92,6 +96,8 @@ def parse_pub_date(date_str: str | None) -> datetime:
         if dt is not None:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
             return dt
     except Exception:
         pass
@@ -102,11 +108,58 @@ def parse_pub_date(date_str: str | None) -> datetime:
         dt = datetime.fromisoformat(iso_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
         return dt
     except Exception:
         pass
 
-    # Default fallback
+    return None
+
+
+def is_news_fresh(
+    pub_date: datetime | str | None,
+    ref_time: datetime | None = None,
+    max_age_hours: float = 24.0,
+) -> tuple[bool, str]:
+    """Check if publication timestamp is timezone-aware UTC and satisfies:
+    published_at >= ref_time - max_age_hours.
+
+    Returns tuple of (is_fresh: bool, status: str) where status is one of:
+    'fresh', 'stale', 'missing_date', 'invalid_date'.
+    """
+    if pub_date is None:
+        return False, "missing_date"
+
+    if isinstance(pub_date, str):
+        parsed = parse_pub_date_utc(pub_date)
+        if parsed is None:
+            return False, "invalid_date"
+        pub_dt = parsed
+    elif isinstance(pub_date, datetime):
+        if pub_date.tzinfo is None:
+            pub_dt = pub_date.replace(tzinfo=timezone.utc)
+        else:
+            pub_dt = pub_date.astimezone(timezone.utc)
+    else:
+        return False, "invalid_date"
+
+    reference = ref_time if ref_time is not None else datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+
+    cutoff = reference - timedelta(hours=max_age_hours)
+    if pub_dt < cutoff:
+        return False, "stale"
+
+    return True, "fresh"
+
+
+def parse_pub_date(date_str: str | None) -> datetime:
+    """Parse RSS/Atom publication date string into timezone-aware datetime."""
+    parsed = parse_pub_date_utc(date_str)
+    if parsed is not None:
+        return parsed
     return datetime.now(timezone.utc)
 
 

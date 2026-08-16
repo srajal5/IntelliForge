@@ -76,6 +76,17 @@ JOBS_HEADERS = [
     "collected_at",
 ]
 
+ENTITY_MAPPING_HEADERS = [
+    "raw_name",
+    "normalized_name",
+    "canonical_name",
+    "canonical_id",
+    "match_method",
+    "confidence",
+    "source_url",
+    "timestamp",
+]
+
 
 def transform_research_paper(doc: dict[str, Any]) -> list[Any] | None:
     """Transform a ResearchPaper document into a sheet row.
@@ -289,10 +300,47 @@ def transform_job(doc: dict[str, Any]) -> list[Any] | None:
     ]
 
 
+def transform_entity_mapping(doc: dict[str, Any]) -> list[Any] | None:
+    """Transform an EntityMapping document into a sheet row for Entity Mapping Log.
+
+    Fields: raw_name, normalized_name, canonical_name, canonical_id, match_method, confidence, source_url, timestamp
+    Preserves raw_name, canonical_name, match_method, confidence, and timestamp.
+    Does not fabricate missing values.
+    """
+    raw_name = doc.get("raw_name") or ""
+    canonical_name = doc.get("canonical_name") or ""
+    if not raw_name or not canonical_name:
+        return None
+
+    normalized_name = doc.get("normalized_name") or ""
+    canonical_id = doc.get("canonical_id") or doc.get("canonical_entity_id") or ""
+    match_method = doc.get("match_method") or ""
+    confidence = doc.get("confidence")
+    confidence_val = float(confidence) if confidence is not None else ""
+
+    source_url = doc.get("source_url")
+    source_url_str = str(source_url) if source_url is not None else ""
+
+    timestamp = str(doc.get("timestamp") or doc.get("created_at") or doc.get("resolved_at") or "")
+
+    return [
+        str(raw_name),
+        str(normalized_name),
+        str(canonical_name),
+        str(canonical_id),
+        str(match_method),
+        confidence_val,
+        source_url_str,
+        timestamp,
+    ]
+
+
 VERTICAL_TRANSFORMERS = {
     "research": ("Research Papers", RESEARCH_PAPERS_HEADERS, transform_research_paper),
     "startups": ("Startups", STARTUPS_HEADERS, transform_startup),
     "products": ("Products", PRODUCTS_HEADERS, transform_product),
     "news": ("News", NEWS_HEADERS, transform_news),
     "jobs": ("Jobs", JOBS_HEADERS, transform_job),
+    "entity-mappings": ("Entity Mapping Log", ENTITY_MAPPING_HEADERS, transform_entity_mapping),
 }
+

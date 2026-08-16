@@ -440,11 +440,12 @@ def resolve(ctx):
 @click.option("--dry-run", is_flag=True, help="Simulate export without writing to Google Sheets.")
 @click.option(
     "--vertical",
-    type=click.Choice(["research", "startups", "products", "news", "jobs"], case_sensitive=False),
+    type=click.Choice(["research", "startups", "products", "news", "jobs", "entity-mappings", "entity_mappings", "entity-mapping-log"], case_sensitive=False),
     default=None,
-    help="Filter export to a specific vertical.",
+    help="Filter export to a specific vertical or worksheet.",
 )
 @click.pass_context
+
 def export(ctx, dry_run: bool, vertical: str | None):
     """Export validated pipeline data to Google Sheets."""
     from src.services.exporter import ExporterService

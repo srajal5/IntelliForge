@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import email.utils
 import json
 import re
@@ -82,16 +82,20 @@ ROLE_FAMILY_KEYWORDS: dict[str, list[str]] = {
 }
 
 
-def parse_job_date(val: Any) -> datetime:
-    """Parse posting date timestamp, ISO string, or RFC 822 date into UTC datetime."""
+def parse_job_date_utc(val: Any) -> datetime | None:
+    """Parse posting date timestamp, ISO string, or RFC 822 date into UTC datetime.
+
+    Returns None if date is missing, invalid, or unreliable.
+    Does not use collection time as fallback.
+    """
     if val is None:
-        return datetime.now(timezone.utc)
+        return None
 
     # If already a datetime
     if isinstance(val, datetime):
         if val.tzinfo is None:
             return val.replace(tzinfo=timezone.utc)
-        return val
+        return val.astimezone(timezone.utc)
 
     # Unix timestamp (int/float)
     if isinstance(val, (int, float)):
@@ -103,7 +107,7 @@ def parse_job_date(val: Any) -> datetime:
     # String timestamp
     val_str = str(val).strip()
     if not val_str:
-        return datetime.now(timezone.utc)
+        return None
 
     # String containing digits only (Unix timestamp)
     if val_str.isdigit():
@@ -118,6 +122,8 @@ def parse_job_date(val: Any) -> datetime:
         dt = datetime.fromisoformat(iso_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
         return dt
     except Exception:
         pass
@@ -128,10 +134,58 @@ def parse_job_date(val: Any) -> datetime:
         if dt is not None:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
             return dt
     except Exception:
         pass
 
+    return None
+
+
+def is_job_fresh(
+    job_date: datetime | str | None,
+    ref_time: datetime | None = None,
+    max_age_hours: float = 24.0,
+) -> tuple[bool, str]:
+    """Check if job posting date is timezone-aware UTC and satisfies:
+    job_date >= ref_time - max_age_hours.
+
+    Returns tuple of (is_fresh: bool, status: str) where status is one of:
+    'fresh', 'stale', 'missing_date', 'invalid_date'.
+    """
+    if job_date is None:
+        return False, "missing_date"
+
+    if isinstance(job_date, (str, int, float)):
+        parsed = parse_job_date_utc(job_date)
+        if parsed is None:
+            return False, "invalid_date"
+        job_dt = parsed
+    elif isinstance(job_date, datetime):
+        if job_date.tzinfo is None:
+            job_dt = job_date.replace(tzinfo=timezone.utc)
+        else:
+            job_dt = job_date.astimezone(timezone.utc)
+    else:
+        return False, "invalid_date"
+
+    reference = ref_time if ref_time is not None else datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+
+    cutoff = reference - timedelta(hours=max_age_hours)
+    if job_dt < cutoff:
+        return False, "stale"
+
+    return True, "fresh"
+
+
+def parse_job_date(val: Any) -> datetime:
+    """Parse posting date timestamp, ISO string, or RFC 822 date into UTC datetime."""
+    parsed = parse_job_date_utc(val)
+    if parsed is not None:
+        return parsed
     return datetime.now(timezone.utc)
 
 

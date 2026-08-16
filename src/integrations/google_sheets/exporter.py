@@ -32,6 +32,22 @@ MONGO_COLLECTIONS = {
     "products": "products",
     "news": "news",
     "jobs": "jobs",
+    "entity-mappings": "entity_mappings",
+    "entity_mappings": "entity_mappings",
+    "entity-mapping-log": "entity_mappings",
+    "entity_mapping_log": "entity_mappings",
+}
+
+VERTICAL_ALIAS_MAP = {
+    "research": "research",
+    "startups": "startups",
+    "products": "products",
+    "news": "news",
+    "jobs": "jobs",
+    "entity-mappings": "entity-mappings",
+    "entity_mappings": "entity-mappings",
+    "entity-mapping-log": "entity-mappings",
+    "entity_mapping_log": "entity-mappings",
 }
 
 
@@ -72,7 +88,7 @@ class GoogleSheetsExporter:
     def export(self, options: ExportOptions | None = None) -> ExportSummary:
         """Run export according to provided options.
 
-        Supports single vertical filtering or all 5 verticals.
+        Supports single vertical filtering or all 6 worksheets.
         Supports --dry-run.
         """
         start_time = time.time()
@@ -87,7 +103,8 @@ class GoogleSheetsExporter:
 
         # Determine target verticals
         if opts.vertical:
-            vert_key = opts.vertical.lower()
+            raw_key = opts.vertical.lower()
+            vert_key = VERTICAL_ALIAS_MAP.get(raw_key, raw_key)
             if vert_key not in VERTICAL_TRANSFORMERS:
                 return ExportSummary(
                     status="error",
@@ -97,6 +114,7 @@ class GoogleSheetsExporter:
             target_verticals = [vert_key]
         else:
             target_verticals = list(VERTICAL_TRANSFORMERS.keys())
+
 
         # Check configuration for non-dry-run
         if not opts.dry_run:
