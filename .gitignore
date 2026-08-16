@@ -58,3 +58,6 @@ service_account.json
 # Distribution
 *.tar.gz
 *.zip
+
+# Local MongoDB data
+mongodb_data/
